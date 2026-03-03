@@ -222,6 +222,19 @@ def get_tide_phase(future_df):
     return "潮止まり付近"
 
 
+def get_tide_baseline(df):
+    tide_values = pd.to_numeric(df["sea_level_height_msl"], errors="coerce")
+    if tide_values.notna().any():
+        return float(tide_values.min())
+    return None
+
+
+def to_relative_tide_cm(height_m, baseline_m):
+    if baseline_m is None or pd.isna(height_m):
+        return None
+    return int(round(max(0.0, (float(height_m) - baseline_m) * 100)))
+
+
 # --- 3. データ取得 ---
 @st.cache_data(ttl=1800)
 def get_all_data(lat, lon):
@@ -278,6 +291,7 @@ try:
     now = datetime.now()
     future_df = df[df["time"] >= now]
     current = future_df.iloc[0] if not future_df.empty else df.iloc[-1]
+    tide_baseline = get_tide_baseline(df)
 
     # 上部メトリクス
     st.header(f"現在のコンディション: {selected_name}")
@@ -302,21 +316,26 @@ try:
     # タイド + 日照情報
     st.subheader("🕒 タイド・日照")
     sunrise_text, sunset_text = pick_today_sun_times(sun_df, now)
-    if pd.notna(current.get("sea_level_height_msl")):
-        tide_now_text = f"{float(current['sea_level_height_msl']):.2f} m"
-    else:
-        tide_now_text = "データなし"
+    current_tide_cm = to_relative_tide_cm(current.get("sea_level_height_msl"), tide_baseline)
+    tide_now_text = f"{current_tide_cm} cm" if current_tide_cm is not None else "データなし"
 
     s1, s2, s3 = st.columns(3)
     s1.metric("日の出", sunrise_text)
     s2.metric("日の入り", sunset_text)
-    s3.metric("現在の潮位(推定)", tide_now_text)
+    s3.metric("現在の潮位(相対)", tide_now_text)
     st.caption(f"潮汐トレンド: {get_tide_phase(future_df)} / このポイントの狙い: {pos['best_tide']}")
+    st.caption("※相対潮位は、この予報期間で最も低い潮位を0cmとした目安です。")
 
     next_tides = summarize_next_tide_events(df, now)
     if next_tides:
-        tide_text = " / ".join([f"{name} {time.strftime('%H:%M')} ({height:.2f}m)" for name, time, height in next_tides])
-        st.write(f"次の潮汐目安: {tide_text}")
+        event_texts = []
+        for name, time, height in next_tides:
+            event_cm = to_relative_tide_cm(height, tide_baseline)
+            if event_cm is None:
+                event_texts.append(f"{name} {time.strftime('%H:%M')}")
+            else:
+                event_texts.append(f"{name} {time.strftime('%H:%M')} ({event_cm}cm)")
+        st.write(f"次の潮汐目安: {' / '.join(event_texts)}")
     else:
         st.caption("満潮/干潮の推定イベントを取得できませんでした。")
 
@@ -369,7 +388,7 @@ try:
     # 予測グラフ
     st.divider()
     st.subheader("📈 48時間の予測データ")
-    t1, t2, t3 = st.tabs(["波高推移", "風速推移", "潮位推移(推定)"])
+    t1, t2, t3 = st.tabs(["波高推移", "風速推移", "潮位推移(相対cm)"])
     with t1:
         fig_w = px.area(
             df[df["time"] >= now].head(48),
@@ -389,13 +408,17 @@ try:
         )
         st.plotly_chart(fig_s, use_container_width=True)
     with t3:
-        tide_48 = df[df["time"] >= now].head(48)
-        if tide_48["sea_level_height_msl"].notna().any():
+        tide_48 = df[df["time"] >= now].head(48).copy()
+        tide_48["tide_cm_rel"] = pd.to_numeric(tide_48["sea_level_height_msl"], errors="coerce")
+        if tide_baseline is not None:
+            tide_48["tide_cm_rel"] = ((tide_48["tide_cm_rel"] - tide_baseline) * 100).clip(lower=0)
+
+        if tide_48["tide_cm_rel"].notna().any():
             fig_t = px.line(
                 tide_48,
                 x="time",
-                y="sea_level_height_msl",
-                labels={"sea_level_height_msl": "海面高度(m)"},
+                y="tide_cm_rel",
+                labels={"tide_cm_rel": "相対潮位(cm)"},
                 color_discrete_sequence=["#2a9d8f"],
             )
             st.plotly_chart(fig_t, use_container_width=True)
