@@ -35,7 +35,10 @@ POINTS = {
     "茨城：鹿島市 明石ポイント": {"lat": 35.97, "lon": 140.74, "coast_normal": 95, "swell_window": 75},
 }
 
-selected_name = st.sidebar.selectbox("📍 ポイントを選択", list(POINTS.keys()))
+point_names = list(POINTS.keys())
+st.sidebar.info("ポイント切り替えは画面上部のセレクターから行えます。")
+selected_name = st.selectbox("📍 表示ポイントを選択（スマホはここ）", point_names)
+st.caption(f"選択中: {selected_name}")
 pos = POINTS[selected_name]
 
 
